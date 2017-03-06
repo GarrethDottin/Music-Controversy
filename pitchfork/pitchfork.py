@@ -45,7 +45,7 @@ class Review:
     """
 
     def __init__(self, searched_artist, searched_album, matched_artist,
-                 matched_album, query, url, soup):
+                 matched_album, query, url, soup, timestamp):
         self.searched_artist = searched_artist
         self.searched_album = searched_album
         self.matched_artist = matched_artist
@@ -53,6 +53,7 @@ class Review:
         self.query = query
         self.url = url
         self.soup = soup
+        self.timestamp = timestamp
 
     def score(self):
         """ Returns the album score. """
@@ -91,7 +92,7 @@ class Review:
         In case of a reissue album, the year of original release as well as
         the year of the reissue is given separated by '/'.
         """
-        year = self.soup.find(class_='year').contents[1].get_text()
+        year = self.soup.find(class_='year').text
         return year
 
     def _json_safe_dict(self):
@@ -175,6 +176,39 @@ class MultiReview(Review):
         d = self._json_safe_dict()
         return json.dumps(d)
 
+
+def allAlbums(artist):
+    """
+        Look for the review of the specified album by the specified artist.
+        Returns either a Review object or a MultiReview object depending on
+        the type of review because some pitchfork reviews cover multiple albums.
+        """
+
+    # replace spaces in the url with the '%20'
+    albums = []
+    query = re.sub('\s+', '%20', artist + '%20')
+    # using a custom user agent header
+    request = Request(url='http://pitchfork.com/search/?query=' + query,
+                      data=None,
+                      headers={'User-Agent': 'michalczaplinski/pitchfork-v0.1'})
+    response = urlopen(request)
+    text = response.read().decode('UTF-8').split('window.App=')[1].split(';</script>')[0]
+
+    # the server responds with json so we load it into a dictionary
+    obj = json.loads(text)
+
+    try:
+        # get the nested dictionary containing url to the review and album name
+        review_dict = obj['context']['dispatcher']['stores']['SearchStore']['results']['albumreviews']['items']
+    except IndexError:
+        review_dict = []
+
+    for title in review_dict:
+        if title['artists'][0] == artist:
+            albums.append(title['title'])
+
+    return albums
+
 def search(artist, album):
     """
     Look for the review of the specified album by the specified artist.
@@ -198,11 +232,11 @@ def search(artist, album):
         # get the nested dictionary containing url to the review and album name
         review_dict = obj['context']['dispatcher']['stores']['SearchStore']['results']['albumreviews']['items'][0]
     except IndexError:
-        raise IndexError('The search returned no results! Try again with diferent parameters.')
+        return
 
     url = review_dict['site_url']
     matched_artist = review_dict['content'].strip().split('\n\n\n')[0]
-
+    timestamp = review_dict['timestamp']
     # fetch the review page
     full_url = urljoin('http://pitchfork.com/', url)
     request = Request(url=full_url,
@@ -215,7 +249,7 @@ def search(artist, album):
     if soup.find(class_='review-multi') is None:
         matched_album = review_dict['title']
 
-        return Review(artist, album, matched_artist, matched_album, query, url, soup)
+        return Review(artist, album, matched_artist, matched_album, query, url, soup, timestamp)
     else:
         # get the titles of all the albums in the multi-review
         titles = [title.get_text() for title in soup.find(class_='review-meta').find_all('h2')]
